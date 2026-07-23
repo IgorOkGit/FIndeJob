@@ -24,9 +24,11 @@ except ImportError:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 MODELS_CASCADE = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash",
     "gemini-2.5-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
 ]
 
 
@@ -78,6 +80,7 @@ async def generate_search_strategy(prompt: str) -> Optional[dict[str, Any]]:
     client = get_client()
     last_error: Optional[Exception] = None
     for index, model_name in enumerate(MODELS_CASCADE):
+        next_model = MODELS_CASCADE[index + 1] if index + 1 < len(MODELS_CASCADE) else None
         try:
             if index > 0:
                 await asyncio.sleep(4)
@@ -106,10 +109,14 @@ async def generate_search_strategy(prompt: str) -> Optional[dict[str, Any]]:
             if isinstance(data, dict):
                 return data
             return {"raw": data}
-        except (RuntimeError, json.JSONDecodeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             last_error = exc
-            if "429" in str(exc) or "Too Many Requests" in str(exc) or "ResourceExhausted" in str(exc) or "503" in str(exc):
-                logger.warning("[WARNING] Limit reached for %s. Switching to next model...", model_name)
+            message = str(exc)
+            if any(token in message for token in ("404", "429", "ResourceExhausted", "ClientError", "Too Many Requests", "503")):
+                if next_model:
+                    logger.warning(f"Модель {model_name} недоступна, пробуємо {next_model}...")
+                    continue
+                logger.warning(f"Модель {model_name} недоступна, більше моделей немає")
                 continue
             logger.exception("Search strategy model %s failed", model_name)
             break
@@ -128,6 +135,7 @@ async def analyze_job_with_fallback(prompt: str, schema: Optional[type[BaseModel
 
     last_error: Optional[Exception] = None
     for index, model_name in enumerate(MODELS_CASCADE):
+        next_model = MODELS_CASCADE[index + 1] if index + 1 < len(MODELS_CASCADE) else None
         try:
             if index > 0:
                 await asyncio.sleep(4)
@@ -151,10 +159,14 @@ async def analyze_job_with_fallback(prompt: str, schema: Optional[type[BaseModel
                     normalized["risk_warnings"] = ["No major risks identified"]
                 return JobAnalysis.model_validate(normalized)
             return JobAnalysis.model_validate(json.loads(json.dumps(data)))
-        except (RuntimeError, ValidationError, json.JSONDecodeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             last_error = exc
-            if "429" in str(exc) or "Too Many Requests" in str(exc) or "ResourceExhausted" in str(exc) or "503" in str(exc):
-                logger.warning("[WARNING] Limit reached for %s. Switching to next model...", model_name)
+            message = str(exc)
+            if any(token in message for token in ("404", "429", "ResourceExhausted", "ClientError", "Too Many Requests", "503")):
+                if next_model:
+                    logger.warning(f"Модель {model_name} недоступна, пробуємо {next_model}...")
+                    continue
+                logger.warning(f"Модель {model_name} недоступна, більше моделей немає")
                 continue
             logger.exception("Model %s failed", model_name)
             break

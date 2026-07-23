@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, Optional
 
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramServerError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand
 
@@ -157,6 +157,9 @@ class SmartJobMatcherBot:
                 try:
                     await message.message.edit_text(text, reply_markup=markup)
                 except TelegramBadRequest as exc:
+                    if "message is not modified" in str(exc).lower():
+                        await message.answer("Нових вакансій поки немає")
+                        return
                     logger.warning("Unable to edit search message for user %s: %s", user_id, exc)
                     await message.message.answer(text, reply_markup=markup)
             else:
@@ -184,6 +187,9 @@ class SmartJobMatcherBot:
             try:
                 await message.message.edit_text(text, reply_markup=markup)
             except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    await message.answer("Нових вакансій поки немає")
+                    return
                 logger.warning("Unable to edit search message for user %s: %s", user_id, exc)
                 await message.message.answer(text, reply_markup=markup)
         else:
@@ -344,7 +350,17 @@ class SmartJobMatcherBot:
 
     async def run(self) -> None:
         await init_db()
-        await self.bot.delete_webhook(drop_pending_updates=True)
+        for attempt in range(3):
+            try:
+                await self.bot.delete_webhook(drop_pending_updates=True)
+                break
+            except (TelegramServerError, TelegramNetworkError) as exc:
+                if attempt == 2:
+                    logger.warning("Webhook cleanup failed after retries: %s", exc)
+                    break
+                logger.warning("Webhook cleanup failed, retrying (%s/3): %s", attempt + 1, exc)
+                await asyncio.sleep(2)
+
         await self.bot.set_my_commands(
             [
                 BotCommand(command="start", description="Реєстрація"),
@@ -358,6 +374,11 @@ class SmartJobMatcherBot:
     async def stop(self) -> None:
         try:
             await self.dp.stop_polling()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.bot, "session") and self.bot.session is not None:
+                await self.bot.session.close()
         except Exception:
             pass
         try:

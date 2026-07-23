@@ -298,9 +298,9 @@ async def get_user_liked_jobs(user_id: int, limit: int = 10, offset: int = 0) ->
                 WHERE uj.user_id = :user_id AND uj.status = 'liked'
                 ORDER BY uj.updated_at DESC
                 LIMIT :limit OFFSET :offset
-                """,
-                {"user_id": user_id, "limit": limit, "offset": offset},
-            )
+                """
+            ),
+            {"user_id": user_id, "limit": limit, "offset": offset},
         )
         rows = result.fetchall()
 
