@@ -1,16 +1,19 @@
 import asyncio
 import hashlib
 import html
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import feedparser
 import httpx
 
+logger = logging.getLogger(__name__)
+
 RSS_FEEDS: List[Tuple[str, str]] = [
+    ("DOU", "https://jobs.dou.ua/vacancies/feeds/?category=Technical+Support"),
+    ("Djinni", "https://djinni.co/jobs/rss/?category=sysadmin"),
     ("Upwork", "https://www.upwork.com/ab/feed/jobs/rss"),
-    ("Djinni", "https://djinni.co/jobs/feed/"),
-    ("DOU", "https://jobs.dou.ua/vacancies/feed/"),
 ]
 
 
@@ -44,9 +47,23 @@ def _build_job_id(source: str, title: str, url: str, raw_text: str) -> str:
 
 
 async def _fetch_feed(feed_url: str, source: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
-    response = await client.get(feed_url, follow_redirects=True, timeout=15.0)
-    response.raise_for_status()
-    parsed = feedparser.parse(response.text)
+    try:
+        response = await client.get(
+            feed_url,
+            follow_redirects=True,
+            timeout=20.0,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("RSS fetch failed for %s (%s): %s", source, feed_url, exc)
+        return []
+
+    try:
+        parsed = feedparser.parse(response.text)
+    except Exception as exc:
+        logger.warning("RSS parse failed for %s: %s", source, exc)
+        return []
 
     jobs: List[Dict[str, Any]] = []
     for entry in parsed.entries:
@@ -76,11 +93,12 @@ async def _fetch_feed(feed_url: str, source: str, client: httpx.AsyncClient) -> 
     return jobs
 
 
-async def fetch_rss_jobs() -> List[Dict[str, Any]]:
+async def fetch_rss_jobs(feed_specs: Optional[List[Tuple[str, str]]] = None) -> List[Dict[str, Any]]:
     """Fetch job postings from configured RSS feeds and return normalized job dictionaries."""
-    async with httpx.AsyncClient() as client:
+    specs = feed_specs or RSS_FEEDS
+    async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
         results = await asyncio.gather(
-            *[_fetch_feed(url, source, client) for source, url in RSS_FEEDS],
+            *[_fetch_feed(url, source, client) for source, url in specs],
             return_exceptions=True,
         )
 

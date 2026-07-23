@@ -29,6 +29,7 @@ class UserSetting(Base):
     min_salary = Column(Integer, nullable=True)
     bio_prompt = Column(Text, nullable=True)
     preferences = Column(Text, nullable=True)
+    search_strategy = Column(Text, nullable=True)
     risk_sensitivity = Column(String(50), nullable=True)
 
 
@@ -84,6 +85,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS preferences TEXT"))
+        await conn.execute(text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS search_strategy TEXT"))
 
 
 async def upsert_user_and_settings(
@@ -94,6 +96,7 @@ async def upsert_user_and_settings(
     min_salary: Optional[int] = None,
     bio_prompt: Optional[str] = None,
     preferences: Optional[str] = None,
+    search_strategy: Optional[str] = None,
     risk_sensitivity: Optional[str] = None,
 ) -> None:
     """Insert or update a user and their settings in a single transaction."""
@@ -115,6 +118,7 @@ async def upsert_user_and_settings(
                         min_salary=min_salary,
                         bio_prompt=bio_prompt,
                         preferences=preferences,
+                        search_strategy=search_strategy,
                         risk_sensitivity=risk_sensitivity,
                     )
                 )
@@ -124,6 +128,7 @@ async def upsert_user_and_settings(
                 settings.min_salary = min_salary if min_salary is not None else settings.min_salary
                 settings.bio_prompt = bio_prompt if bio_prompt is not None else settings.bio_prompt
                 settings.preferences = preferences if preferences is not None else settings.preferences
+                settings.search_strategy = search_strategy if search_strategy is not None else settings.search_strategy
                 settings.risk_sensitivity = risk_sensitivity if risk_sensitivity is not None else settings.risk_sensitivity
 
 
@@ -134,7 +139,7 @@ async def get_all_users_with_settings() -> List[Dict[str, Any]]:
             text(
                 """
                 SELECT u.user_id, u.username, s.keywords, s.stop_words, s.min_salary,
-                       s.bio_prompt, s.preferences, s.risk_sensitivity
+                       s.bio_prompt, s.preferences, s.search_strategy, s.risk_sensitivity
                 FROM users AS u
                 LEFT JOIN user_settings AS s ON s.user_id = u.user_id
                 ORDER BY u.user_id
@@ -152,7 +157,8 @@ async def get_all_users_with_settings() -> List[Dict[str, Any]]:
             "min_salary": row[4],
             "bio_prompt": row[5],
             "preferences": row[6],
-            "risk_sensitivity": row[7],
+            "search_strategy": row[7],
+            "risk_sensitivity": row[8],
         }
         for row in rows
     ]

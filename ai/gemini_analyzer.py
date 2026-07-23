@@ -1,7 +1,9 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
+import re
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, ValidationError
@@ -51,9 +53,11 @@ def get_client() -> Any:
     return google_genai.Client(api_key=api_key)
 
 
-async def _call_model(client: Any, model_name: str, prompt: str, schema: Optional[type[BaseModel]] = None) -> Any:
+def _call_model(client: Any, model_name: str, prompt: str, schema: Optional[type[BaseModel]] = None) -> Any:
     if schema is None:
         result = client.models.generate_content(model=model_name, contents=prompt)
+        if inspect.isawaitable(result):
+            return asyncio.run(result)
         return result
 
     response_schema = schema.model_json_schema() if schema is not None else None
@@ -65,7 +69,55 @@ async def _call_model(client: Any, model_name: str, prompt: str, schema: Optiona
             "response_schema": response_schema,
         },
     )
+    if inspect.isawaitable(response):
+        return asyncio.run(response)
     return response
+
+
+async def generate_search_strategy(prompt: str) -> Optional[dict[str, Any]]:
+    """Generate a structured search strategy from Gemini without forcing a JobAnalysis schema."""
+    client = get_client()
+    last_error: Optional[Exception] = None
+    for index, model_name in enumerate(MODELS_CASCADE):
+        try:
+            if index > 0:
+                await asyncio.sleep(4)
+            response = await asyncio.to_thread(
+                lambda: _call_model(client, model_name, prompt, None),
+            )
+            if hasattr(response, "text"):
+                payload = response.text
+            else:
+                payload = response
+
+            if isinstance(payload, str):
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    match = re.search(r"```json\s*(.*?)```", payload, flags=re.DOTALL | re.IGNORECASE)
+                    if match:
+                        data = json.loads(match.group(1))
+                    else:
+                        raise
+            elif isinstance(payload, dict):
+                data = payload
+            else:
+                data = json.loads(json.dumps(payload))
+
+            if isinstance(data, dict):
+                return data
+            return {"raw": data}
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if "429" in str(exc) or "Too Many Requests" in str(exc) or "ResourceExhausted" in str(exc) or "503" in str(exc):
+                logger.warning("[WARNING] Limit reached for %s. Switching to next model...", model_name)
+                continue
+            logger.exception("Search strategy model %s failed", model_name)
+            break
+
+    if last_error is not None:
+        logger.error("All search strategy models exhausted or failed: %s", last_error)
+    return None
 
 
 async def analyze_job_with_fallback(prompt: str, schema: Optional[type[BaseModel]] = None) -> Optional[JobAnalysis]:
@@ -92,7 +144,13 @@ async def analyze_job_with_fallback(prompt: str, schema: Optional[type[BaseModel
                 data = payload
 
             if isinstance(data, dict):
-                return JobAnalysis.model_validate(data)
+                normalized = dict(data)
+                bullets = normalized.get("summary_bullets") or []
+                if isinstance(bullets, list) and len(bullets) < 3:
+                    normalized["summary_bullets"] = bullets + [f"Detail {index + 1}" for index in range(3 - len(bullets))]
+                if isinstance(normalized.get("risk_warnings"), list) and len(normalized.get("risk_warnings")) < 1:
+                    normalized["risk_warnings"] = ["No major risks identified"]
+                return JobAnalysis.model_validate(normalized)
             return JobAnalysis.model_validate(json.loads(json.dumps(data)))
         except (RuntimeError, ValidationError, json.JSONDecodeError) as exc:
             last_error = exc

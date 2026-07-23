@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, Optional
 
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand
 
@@ -121,24 +122,23 @@ class SmartJobMatcherBot:
         await callback.answer("Пошук запущено заново")
 
     async def _send_search_results(self, message: types.Message | types.CallbackQuery, user_id: int) -> None:
-        jobs = await process_jobs()
+        logger.info("Starting dynamic search for user %s", user_id)
+        jobs = await process_jobs(user_id=user_id)
+        logger.info("Search for user %s returned %d raw jobs", user_id, len(jobs))
         user_settings = await self._get_user_settings(user_id)
         few_shot_context = await get_recent_user_job_context(user_id)
 
         matched: list[tuple[Dict[str, Any], Optional[JobAnalysis]]] = []
         for job in jobs:
-            if not check_hard_filters(
-                job,
-                {
-                    "keywords": user_settings.get("keywords") or [],
-                    "stop_words": user_settings.get("stop_words") or [],
-                    "min_salary": user_settings.get("min_salary"),
-                },
-            ):
-                continue
-
             prompt = await build_analysis_prompt(job, user_settings, few_shot_context)
             analysis = await analyze_job_with_fallback(prompt, JobAnalysis)
+            logger.info(
+                "Analyzed job for user %s: %s | fit=%s | risk=%s",
+                user_id,
+                job.get("title"),
+                getattr(analysis, "fit_score", None),
+                getattr(analysis, "risk_score", None),
+            )
             matched.append((job, analysis))
 
         matched.sort(
@@ -154,7 +154,11 @@ class SmartJobMatcherBot:
             text = "🔎 Пошук завершено. Поки що немає підходящих вакансій."
             markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Шукати ще", callback_data="search:refresh")]])
             if isinstance(message, types.CallbackQuery):
-                await message.message.edit_text(text, reply_markup=markup)
+                try:
+                    await message.message.edit_text(text, reply_markup=markup)
+                except TelegramBadRequest as exc:
+                    logger.warning("Unable to edit search message for user %s: %s", user_id, exc)
+                    await message.message.answer(text, reply_markup=markup)
             else:
                 await message.answer(text, reply_markup=markup)
             return
@@ -177,7 +181,11 @@ class SmartJobMatcherBot:
         markup = builder.as_markup()
 
         if isinstance(message, types.CallbackQuery):
-            await message.message.edit_text(text, reply_markup=markup)
+            try:
+                await message.message.edit_text(text, reply_markup=markup)
+            except TelegramBadRequest as exc:
+                logger.warning("Unable to edit search message for user %s: %s", user_id, exc)
+                await message.message.answer(text, reply_markup=markup)
         else:
             await message.answer(text, reply_markup=markup)
 
