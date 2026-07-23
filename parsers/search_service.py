@@ -8,12 +8,49 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SEARCH_STRATEGY = {
     "sources": [
-        {"name": "DOU", "category": "Technical Support", "keywords": ["technical support", "support specialist"]},
-        {"name": "Djinni", "category": "project-manager", "keywords": ["project manager", "delivery manager"]},
+        {"name": "DOU", "category": "Support", "keywords": ["technical support", "support specialist"]},
+        {"name": "Djinni", "category": "sysadmin", "keywords": ["sysadmin", "devops", "support"]},
     ],
     "fallback_keywords": ["technical support", "support specialist", "service desk"],
     "search_terms": ["technical support", "support specialist"],
 }
+
+ALLOWED_DOU_CATEGORIES = {"Project Manager", "Support", "SysAdmin", "DevOps", "QA", ""}
+ALLOWED_DJINNI_CATEGORIES = {"project-manager", "sysadmin", "devops", "qa", "support", ""}
+
+
+def _normalize_dou_category(category: str) -> str:
+    cleaned = category.strip()
+    if cleaned in ALLOWED_DOU_CATEGORIES:
+        return cleaned
+    mapping = {
+        "project manager": "Project Manager",
+        "project-manager": "Project Manager",
+        "technical support": "Support",
+        "support": "Support",
+        "sysadmin": "SysAdmin",
+        "devops": "DevOps",
+        "qa": "QA",
+        "quality assurance": "QA",
+    }
+    return mapping.get(cleaned.lower(), "")
+
+
+def _normalize_djinni_category(category: str) -> str:
+    cleaned = category.strip()
+    if cleaned in ALLOWED_DJINNI_CATEGORIES:
+        return cleaned
+    mapping = {
+        "project manager": "project-manager",
+        "project-manager": "project-manager",
+        "technical support": "support",
+        "support": "support",
+        "sysadmin": "sysadmin",
+        "devops": "devops",
+        "qa": "qa",
+        "quality assurance": "qa",
+    }
+    return mapping.get(cleaned.lower(), "")
 
 
 def normalize_search_strategy(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -25,10 +62,17 @@ def normalize_search_strategy(payload: Optional[Dict[str, Any]]) -> Dict[str, An
     for source in sources:
         if not isinstance(source, dict):
             continue
+        source_name = str(source.get("name") or "DOU")
+        category = str(source.get("category") or "")
+        if source_name.upper() == "DOU":
+            category = _normalize_dou_category(category)
+        elif source_name.upper() == "DJINNI":
+            category = _normalize_djinni_category(category)
+
         normalized_sources.append(
             {
-                "name": str(source.get("name") or "DOU"),
-                "category": str(source.get("category") or ""),
+                "name": source_name,
+                "category": category,
                 "keywords": [str(keyword) for keyword in (source.get("keywords") or []) if str(keyword).strip()],
             }
         )
@@ -71,6 +115,13 @@ Given the user's profile and preferences below, return a compact JSON object wit
 - fallback_keywords: array of keywords to use when a source has no matching results
 - search_terms: array of search terms to try across sites
 
+IMPORTANT RULES:
+- For DOU, category MUST be one of: Project Manager, Support, SysAdmin, DevOps, QA, or empty string.
+- For Djinni, category MUST be one of: project-manager, sysadmin, devops, qa, support, or empty string.
+- Do NOT invent arbitrary English names like Job Board, Career, IT Management, or similar.
+- If the user intent is not clear, use empty string for the category and rely on keywords.
+- For Upwork, use the source name "Upwork" and leave category empty unless a known category is explicitly requested.
+
 User context:
 {profile_text}
 
@@ -95,14 +146,16 @@ async def build_search_urls(strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
 
         if name == "DOU":
-            if category:
-                encoded = category.replace(" ", "+")
+            normalized_category = _normalize_dou_category(category)
+            if normalized_category:
+                encoded = normalized_category.replace(" ", "+")
                 urls.append({"source": name, "url": f"https://jobs.dou.ua/vacancies/feeds/?category={encoded}"})
             else:
-                urls.append({"source": name, "url": "https://jobs.dou.ua/vacancies/feeds/?category=Technical+Support"})
+                urls.append({"source": name, "url": "https://jobs.dou.ua/vacancies/feeds/?category=Support"})
         elif name == "DJINNI":
-            if category:
-                urls.append({"source": name, "url": f"https://djinni.co/jobs/rss/?category={category.lower().replace(' ', '-')}"})
+            normalized_category = _normalize_djinni_category(category)
+            if normalized_category:
+                urls.append({"source": name, "url": f"https://djinni.co/jobs/rss/?category={normalized_category}"})
             else:
                 urls.append({"source": name, "url": "https://djinni.co/jobs/rss/?category=sysadmin"})
         elif name == "UPWORK":
@@ -111,5 +164,5 @@ async def build_search_urls(strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
             urls.append({"source": name, "url": ""})
 
     if not urls:
-        urls = [{"source": "DOU", "url": "https://jobs.dou.ua/vacancies/feeds/?category=Technical+Support"}]
+        urls = [{"source": "DOU", "url": "https://jobs.dou.ua/vacancies/feeds/?category=Support"}]
     return urls

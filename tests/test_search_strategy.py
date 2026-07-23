@@ -17,7 +17,7 @@ class SearchStrategyTests(unittest.TestCase):
         strategy = normalize_search_strategy(payload)
 
         self.assertEqual(strategy["sources"][0]["name"], "DOU")
-        self.assertEqual(strategy["sources"][0]["category"], "Technical Support")
+        self.assertEqual(strategy["sources"][0]["category"], "Support")
         self.assertEqual(strategy["fallback_keywords"], ["customer support", "service desk"])
         self.assertEqual(strategy["search_terms"], ["service desk", "support manager"])
 
