@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
+from aiogram.types import BotCommand
 
 try:
     from aiogram.client.default import DefaultBotProperties
@@ -37,6 +38,7 @@ class SettingsStates(StatesGroup):
     waiting_for_min_salary = State()
     waiting_for_bio_prompt = State()
     waiting_for_preferences = State()
+    waiting_for_freeform_prompt = State()
 
 
 class SmartJobMatcherBot:
@@ -60,6 +62,7 @@ class SmartJobMatcherBot:
         self.dp.callback_query(F.data == "settings:preferences")(self.ask_preferences)
         self.dp.callback_query(F.data == "settings:preferences_remove")(self.clear_preferences)
         self.dp.callback_query(F.data == "search:refresh")(self.refresh_search)
+        self.dp.message(SettingsStates.waiting_for_freeform_prompt)(self.process_freeform_prompt)
         self.dp.callback_query(F.data.startswith("page:"))(self.handle_page)
         self.dp.callback_query(F.data.startswith("remove:"))(self.handle_remove)
         self.dp.callback_query(F.data.startswith("open:"))(self.handle_open)
@@ -83,6 +86,8 @@ class SmartJobMatcherBot:
                 "Щоб Gemini підбирало вакансії точніше, напишіть свої побажання. Наприклад: «Шукаю backend вакансії в Україні, з salary від 3000 USD, без розсилок і без повної зайнятості»."
             )
             await state.set_state(SettingsStates.waiting_for_preferences)
+        else:
+            await message.answer("Мої побажання вже збережено. Можеш писати /search або змінити їх у /settings.")
 
     async def settings_command(self, message: types.Message) -> None:
         builder = InlineKeyboardBuilder()
@@ -94,6 +99,16 @@ class SmartJobMatcherBot:
         builder.button(text="Delete preferences", callback_data="settings:preferences_remove")
         builder.adjust(2)
         await message.answer("Оберіть налаштування:", reply_markup=builder.as_markup())
+
+    async def process_freeform_prompt(self, message: types.Message, state: FSMContext) -> None:
+        if not message.text or not message.text.strip():
+            await message.answer("Будь ласка, напишіть текст побажань.")
+            return
+        await self._update_settings(message.from_user.id, preferences=message.text.strip())
+        await message.answer(
+            "✅ Побажання збережено. Тепер я зможу використовувати їх для підбору вакансій."
+        )
+        await state.clear()
 
     async def saved_command(self, message: types.Message) -> None:
         await self._show_saved_jobs(message, message.from_user.id, page=1)
@@ -324,9 +339,10 @@ class SmartJobMatcherBot:
         await self.bot.delete_webhook(drop_pending_updates=True)
         await self.bot.set_my_commands(
             [
-                types.BotCommand(command="start", description="Реєстрація"),
-                types.BotCommand(command="settings", description="Налаштування"),
-                types.BotCommand(command="saved", description="Обране"),
+                BotCommand(command="start", description="Реєстрація"),
+                BotCommand(command="settings", description="Налаштування"),
+                BotCommand(command="saved", description="Обране"),
+                BotCommand(command="search", description="Пошук вакансій"),
             ]
         )
         await self.dp.start_polling(self.bot)

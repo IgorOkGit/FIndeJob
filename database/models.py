@@ -131,13 +131,15 @@ async def get_all_users_with_settings() -> List[Dict[str, Any]]:
     """Return all users together with their settings for multi-user processing."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            """
-            SELECT u.user_id, u.username, s.keywords, s.stop_words, s.min_salary,
-                   s.bio_prompt, s.preferences, s.risk_sensitivity
-            FROM users AS u
-            LEFT JOIN user_settings AS s ON s.user_id = u.user_id
-            ORDER BY u.user_id
-            """
+            text(
+                """
+                SELECT u.user_id, u.username, s.keywords, s.stop_words, s.min_salary,
+                       s.bio_prompt, s.preferences, s.risk_sensitivity
+                FROM users AS u
+                LEFT JOIN user_settings AS s ON s.user_id = u.user_id
+                ORDER BY u.user_id
+                """
+            )
         )
         rows = result.fetchall()
 
