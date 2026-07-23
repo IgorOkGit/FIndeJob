@@ -223,17 +223,19 @@ async def save_or_update_user_job_match(
 async def get_recent_user_job_context(user_id: int, limit: int = 5) -> Dict[str, List[Dict[str, Any]]]:
     """Return the most recent liked and disliked jobs for few-shot context."""
     async with AsyncSessionLocal() as session:
-        liked_result = await session.execute(text(
-            """
-            SELECT j.job_id, j.source, j.title, j.url, uj.summary, uj.status, uj.updated_at
-            FROM user_job_matches AS uj
-            JOIN jobs AS j ON j.job_id = uj.job_id
-            WHERE uj.user_id = :user_id AND uj.status = 'liked'
-            ORDER BY uj.updated_at DESC
-            LIMIT :limit
-            """,
+        liked_result = await session.execute(
+            text(
+                """
+                SELECT j.job_id, j.source, j.title, j.url, uj.summary, uj.status, uj.updated_at
+                FROM user_job_matches AS uj
+                JOIN jobs AS j ON j.job_id = uj.job_id
+                WHERE uj.user_id = :user_id AND uj.status = 'liked'
+                ORDER BY uj.updated_at DESC
+                LIMIT :limit
+                """
+            ),
             {"user_id": user_id, "limit": limit},
-        ))
+        )
         liked_rows = liked_result.fetchall()
 
         disliked_result = await session.execute(
@@ -245,9 +247,9 @@ async def get_recent_user_job_context(user_id: int, limit: int = 5) -> Dict[str,
                 WHERE uj.user_id = :user_id AND uj.status = 'disliked'
                 ORDER BY uj.updated_at DESC
                 LIMIT :limit
-                """,
-                {"user_id": user_id, "limit": limit},
-            )
+                """
+            ),
+            {"user_id": user_id, "limit": limit},
         )
         disliked_rows = disliked_result.fetchall()
 
