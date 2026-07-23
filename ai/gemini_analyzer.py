@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ai.prompts import SYSTEM_PROMPT
+
 try:
     from google import genai as google_genai
 except ImportError:  # pragma: no cover - optional dependency
@@ -34,15 +36,6 @@ class JobAnalysis(BaseModel):
     risk_score: int = Field(ge=0, le=100)
     risk_warnings: list[str]
     should_notify: bool
-
-
-SYSTEM_PROMPT = (
-    "You are an expert IT recruiter and cybersecurity analyst. "
-    "Evaluate job postings for scam risk and fit. Check for signs of fraud, "
-    "including missing company names, crypto payments, Telegram/WhatsApp-only transitions, "
-    "and unclear requirements. Personalize the analysis using the user's bio and preferences. "
-    "Use the provided few-shot examples to calibrate your judgments."
-)
 
 
 def get_client() -> Any:

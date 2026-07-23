@@ -3,9 +3,13 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from ai.gemini_analyzer import analyze_job_with_fallback
+from ai.prompts import SYSTEM_PROMPT
 
 
 class GeminiAnalyzerTests(unittest.TestCase):
+    def test_centralized_system_prompt_is_available(self):
+        self.assertIn("expert IT recruiter", SYSTEM_PROMPT)
+
     def test_fallback_on_rate_limit(self):
         async def run_test():
             with patch("ai.gemini_analyzer.get_client") as mock_get_client:
