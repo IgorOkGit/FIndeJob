@@ -3,12 +3,17 @@ services:
     name: smart-job-matcher-bot
     env: python
     plan: free
+    runtime: python3.11
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
       - key: GOOGLE_API_KEY
+        sync: false
+      - key: DATABASE_URL
         sync: false
       - key: DB_PATH
         value: smart_job_matcher.db

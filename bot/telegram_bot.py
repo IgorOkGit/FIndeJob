@@ -5,6 +5,11 @@ from typing import Any, Dict, Optional
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
+
+try:
+    from aiogram.client.default import DefaultBotProperties
+except ImportError:  # pragma: no cover - compatibility for older aiogram versions
+    DefaultBotProperties = None
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -35,7 +40,10 @@ class SettingsStates(StatesGroup):
 
 class SmartJobMatcherBot:
     def __init__(self, token: str) -> None:
-        self.bot = Bot(token=token, parse_mode="HTML")
+        if DefaultBotProperties is not None:
+            self.bot = Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
+        else:
+            self.bot = Bot(token=token, parse_mode="HTML")
         self.dp = Dispatcher()
         self._register_handlers()
 
@@ -282,7 +290,10 @@ async def notify_new_jobs() -> None:
     if not token:
         return
 
-    bot = Bot(token=token, parse_mode="HTML")
+    if DefaultBotProperties is not None:
+        bot = Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
+    else:
+        bot = Bot(token=token, parse_mode="HTML")
     users = await get_all_users_with_settings()
     jobs = await process_jobs()
     for user in users:
