@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-
+from sqlalchemy import text
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -223,7 +223,7 @@ async def save_or_update_user_job_match(
 async def get_recent_user_job_context(user_id: int, limit: int = 5) -> Dict[str, List[Dict[str, Any]]]:
     """Return the most recent liked and disliked jobs for few-shot context."""
     async with AsyncSessionLocal() as session:
-        liked_result = await session.execute(
+        liked_result = await session.execute(text(
             """
             SELECT j.job_id, j.source, j.title, j.url, uj.summary, uj.status, uj.updated_at
             FROM user_job_matches AS uj
@@ -233,19 +233,21 @@ async def get_recent_user_job_context(user_id: int, limit: int = 5) -> Dict[str,
             LIMIT :limit
             """,
             {"user_id": user_id, "limit": limit},
-        )
+        ))
         liked_rows = liked_result.fetchall()
 
         disliked_result = await session.execute(
-            """
-            SELECT j.job_id, j.source, j.title, j.url, uj.summary, uj.status, uj.updated_at
-            FROM user_job_matches AS uj
-            JOIN jobs AS j ON j.job_id = uj.job_id
-            WHERE uj.user_id = :user_id AND uj.status = 'disliked'
-            ORDER BY uj.updated_at DESC
-            LIMIT :limit
-            """,
-            {"user_id": user_id, "limit": limit},
+            text(
+                """
+                SELECT j.job_id, j.source, j.title, j.url, uj.summary, uj.status, uj.updated_at
+                FROM user_job_matches AS uj
+                JOIN jobs AS j ON j.job_id = uj.job_id
+                WHERE uj.user_id = :user_id AND uj.status = 'disliked'
+                ORDER BY uj.updated_at DESC
+                LIMIT :limit
+                """,
+                {"user_id": user_id, "limit": limit},
+            )
         )
         disliked_rows = disliked_result.fetchall()
 
@@ -280,15 +282,17 @@ async def get_user_liked_jobs(user_id: int, limit: int = 10, offset: int = 0) ->
     """Return liked jobs for a user with pagination."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            """
-            SELECT j.job_id, j.source, j.title, j.url, uj.ai_score, uj.risk_score, uj.summary, uj.status, uj.updated_at
-            FROM user_job_matches AS uj
-            JOIN jobs AS j ON j.job_id = uj.job_id
-            WHERE uj.user_id = :user_id AND uj.status = 'liked'
-            ORDER BY uj.updated_at DESC
-            LIMIT :limit OFFSET :offset
-            """,
-            {"user_id": user_id, "limit": limit, "offset": offset},
+            text(
+                """
+                SELECT j.job_id, j.source, j.title, j.url, uj.ai_score, uj.risk_score, uj.summary, uj.status, uj.updated_at
+                FROM user_job_matches AS uj
+                JOIN jobs AS j ON j.job_id = uj.job_id
+                WHERE uj.user_id = :user_id AND uj.status = 'liked'
+                ORDER BY uj.updated_at DESC
+                LIMIT :limit OFFSET :offset
+                """,
+                {"user_id": user_id, "limit": limit, "offset": offset},
+            )
         )
         rows = result.fetchall()
 
