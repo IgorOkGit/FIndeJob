@@ -36,6 +36,7 @@ class SettingsStates(StatesGroup):
     waiting_for_stop_words = State()
     waiting_for_min_salary = State()
     waiting_for_bio_prompt = State()
+    waiting_for_preferences = State()
 
 
 class SmartJobMatcherBot:
@@ -51,10 +52,14 @@ class SmartJobMatcherBot:
         self.dp.message(CommandStart())(self.start_command)
         self.dp.message(Command("settings"))(self.settings_command)
         self.dp.message(Command("saved"))(self.saved_command)
+        self.dp.message(Command("search"))(self.search_command)
         self.dp.callback_query(F.data == "settings:keywords")(self.ask_keywords)
         self.dp.callback_query(F.data == "settings:stop_words")(self.ask_stop_words)
         self.dp.callback_query(F.data == "settings:min_salary")(self.ask_min_salary)
         self.dp.callback_query(F.data == "settings:bio_prompt")(self.ask_bio_prompt)
+        self.dp.callback_query(F.data == "settings:preferences")(self.ask_preferences)
+        self.dp.callback_query(F.data == "settings:preferences_remove")(self.clear_preferences)
+        self.dp.callback_query(F.data == "search:refresh")(self.refresh_search)
         self.dp.callback_query(F.data.startswith("page:"))(self.handle_page)
         self.dp.callback_query(F.data.startswith("remove:"))(self.handle_remove)
         self.dp.callback_query(F.data.startswith("open:"))(self.handle_open)
@@ -64,13 +69,20 @@ class SmartJobMatcherBot:
         self.dp.message(SettingsStates.waiting_for_stop_words)(self.process_stop_words)
         self.dp.message(SettingsStates.waiting_for_min_salary)(self.process_min_salary)
         self.dp.message(SettingsStates.waiting_for_bio_prompt)(self.process_bio_prompt)
+        self.dp.message(SettingsStates.waiting_for_preferences)(self.process_preferences)
 
-    async def start_command(self, message: types.Message) -> None:
+    async def start_command(self, message: types.Message, state: FSMContext) -> None:
         user_id = message.from_user.id
         await upsert_user_and_settings(user_id=user_id, username=message.from_user.username)
+        settings = await self._get_user_settings(user_id)
         await message.answer(
             "Привіт! Я Smart Job Matcher Bot. Я допоможу знаходити підходящі вакансії та попереджати про ризики скаму."
         )
+        if not (settings.get("preferences") or "").strip():
+            await message.answer(
+                "Щоб Gemini підбирало вакансії точніше, напишіть свої побажання. Наприклад: «Шукаю backend вакансії в Україні, з salary від 3000 USD, без розсилок і без повної зайнятості»."
+            )
+            await state.set_state(SettingsStates.waiting_for_preferences)
 
     async def settings_command(self, message: types.Message) -> None:
         builder = InlineKeyboardBuilder()
@@ -78,11 +90,81 @@ class SmartJobMatcherBot:
         builder.button(text="Stop words", callback_data="settings:stop_words")
         builder.button(text="Min salary", callback_data="settings:min_salary")
         builder.button(text="Bio prompt", callback_data="settings:bio_prompt")
+        builder.button(text="Preferences", callback_data="settings:preferences")
+        builder.button(text="Delete preferences", callback_data="settings:preferences_remove")
         builder.adjust(2)
         await message.answer("Оберіть налаштування:", reply_markup=builder.as_markup())
 
     async def saved_command(self, message: types.Message) -> None:
         await self._show_saved_jobs(message, message.from_user.id, page=1)
+
+    async def search_command(self, message: types.Message) -> None:
+        await self._send_search_results(message, user_id=message.from_user.id)
+
+    async def refresh_search(self, callback: types.CallbackQuery) -> None:
+        await self._send_search_results(callback, user_id=callback.from_user.id)
+        await callback.answer("Пошук запущено заново")
+
+    async def _send_search_results(self, message: types.Message | types.CallbackQuery, user_id: int) -> None:
+        jobs = await process_jobs()
+        user_settings = await self._get_user_settings(user_id)
+        few_shot_context = await get_recent_user_job_context(user_id)
+
+        matched: list[tuple[Dict[str, Any], Optional[JobAnalysis]]] = []
+        for job in jobs:
+            if not check_hard_filters(
+                job,
+                {
+                    "keywords": user_settings.get("keywords") or [],
+                    "stop_words": user_settings.get("stop_words") or [],
+                    "min_salary": user_settings.get("min_salary"),
+                },
+            ):
+                continue
+
+            prompt = await build_analysis_prompt(job, user_settings, few_shot_context)
+            analysis = await analyze_job_with_fallback(prompt, JobAnalysis)
+            matched.append((job, analysis))
+
+        matched.sort(
+            key=lambda item: (
+                item[1].fit_score if item[1] else 0,
+                -(item[1].risk_score if item[1] else 100),
+            ),
+            reverse=True,
+        )
+
+        top_jobs = matched[:10]
+        if not top_jobs:
+            text = "🔎 Пошук завершено. Поки що немає підходящих вакансій."
+            markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Шукати ще", callback_data="search:refresh")]])
+            if isinstance(message, types.CallbackQuery):
+                await message.message.edit_text(text, reply_markup=markup)
+            else:
+                await message.answer(text, reply_markup=markup)
+            return
+
+        lines = ["🔎 <b>Результати пошуку</b>", ""]
+        for index, (job, analysis) in enumerate(top_jobs, start=1):
+            fit_score = analysis.fit_score if analysis else 0
+            risk_score = analysis.risk_score if analysis else 0
+            lines.append(
+                f"{index}. <b>{job.get('title', 'Без назви')}</b>\n"
+                f"   • Джерело: {job.get('source', 'N/A')}\n"
+                f"   • ЗП: {job.get('salary_info') or 'Н/Д'}\n"
+                f"   • Fit: {fit_score}/10 | Risk: {risk_score}%\n"
+                f"   • <a href=\"{job.get('url', '')}\">Відкрити</a>"
+            )
+
+        text = "\n\n".join(lines)
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔄 Шукати ще", callback_data="search:refresh")
+        markup = builder.as_markup()
+
+        if isinstance(message, types.CallbackQuery):
+            await message.message.edit_text(text, reply_markup=markup)
+        else:
+            await message.answer(text, reply_markup=markup)
 
     async def _show_saved_jobs(self, message: types.Message | types.CallbackQuery, user_id: int, page: int = 1, per_page: int = 5) -> None:
         liked_jobs = await get_user_liked_jobs(user_id=user_id, limit=1000, offset=0)
@@ -171,6 +253,16 @@ class SmartJobMatcherBot:
         await state.set_state(SettingsStates.waiting_for_bio_prompt)
         await callback.answer()
 
+    async def ask_preferences(self, callback: types.CallbackQuery, state: FSMContext) -> None:
+        await callback.message.answer("Надішліть побажання для Gemini щодо вакансій")
+        await state.set_state(SettingsStates.waiting_for_preferences)
+        await callback.answer()
+
+    async def clear_preferences(self, callback: types.CallbackQuery) -> None:
+        await self._update_settings(callback.from_user.id, preferences="")
+        await callback.message.answer("Побажання видалено")
+        await callback.answer()
+
     async def process_keywords(self, message: types.Message, state: FSMContext) -> None:
         values = [item.strip() for item in message.text.split(",") if item.strip()]
         await self._update_settings(message.from_user.id, keywords=values)
@@ -198,8 +290,17 @@ class SmartJobMatcherBot:
         await message.answer("Bio prompt оновлено")
         await state.clear()
 
+    async def process_preferences(self, message: types.Message, state: FSMContext) -> None:
+        await self._update_settings(message.from_user.id, preferences=message.text or "")
+        await message.answer("Побажання для Gemini збережено")
+        await state.clear()
+
     async def _update_settings(self, user_id: int, **kwargs: Any) -> None:
         existing = await self._get_user_settings(user_id)
+        preferences = kwargs.get("preferences")
+        if preferences is None:
+            preferences = existing.get("preferences")
+
         await upsert_user_and_settings(
             user_id=user_id,
             username=existing.get("username"),
@@ -207,6 +308,7 @@ class SmartJobMatcherBot:
             stop_words=kwargs.get("stop_words", existing.get("stop_words") or []),
             min_salary=kwargs.get("min_salary", existing.get("min_salary")),
             bio_prompt=kwargs.get("bio_prompt", existing.get("bio_prompt")),
+            preferences=preferences,
             risk_sensitivity=existing.get("risk_sensitivity"),
         )
 
@@ -234,7 +336,10 @@ class SmartJobMatcherBot:
             await self.dp.stop_polling()
         except Exception:
             pass
-        await self.bot.close()
+        try:
+            await self.bot.close()
+        except Exception:
+            pass
 
 
 async def build_job_card(job: Dict[str, Any], analysis: Optional[JobAnalysis]) -> str:

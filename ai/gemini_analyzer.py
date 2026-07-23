@@ -110,6 +110,7 @@ async def analyze_job_with_fallback(prompt: str, schema: Optional[type[BaseModel
 async def build_analysis_prompt(job: dict[str, Any], user_settings: dict[str, Any], few_shot_context: Optional[dict[str, list[dict[str, Any]]]] = None) -> str:
     """Construct the prompt for Gemini analysis using the requested system prompt and few-shot examples."""
     bio_prompt = user_settings.get("bio_prompt") or ""
+    preferences = user_settings.get("preferences") or ""
     keywords = ", ".join(user_settings.get("keywords") or [])
     stop_words = ", ".join(user_settings.get("stop_words") or [])
     few_shot_text = ""
@@ -130,6 +131,7 @@ async def build_analysis_prompt(job: dict[str, Any], user_settings: dict[str, An
 
 User profile:
 - Bio: {bio_prompt}
+- Preferences: {preferences}
 - Keywords: {keywords}
 - Stop words: {stop_words}
 

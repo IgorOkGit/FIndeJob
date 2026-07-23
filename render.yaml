@@ -17,3 +17,7 @@ services:
         sync: false
       - key: DB_PATH
         value: smart_job_matcher.db
+      - key: KEEPALIVE_URL
+        sync: false
+      - key: KEEPALIVE_INTERVAL_MINUTES
+        value: "10"

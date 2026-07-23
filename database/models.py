@@ -1,8 +1,9 @@
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -27,6 +28,7 @@ class UserSetting(Base):
     stop_words = Column(Text, nullable=True)
     min_salary = Column(Integer, nullable=True)
     bio_prompt = Column(Text, nullable=True)
+    preferences = Column(Text, nullable=True)
     risk_sensitivity = Column(String(50), nullable=True)
 
 
@@ -54,24 +56,26 @@ class UserJobMatch(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-def _build_engine_url() -> str:
+def _build_engine_config() -> tuple[str, dict[str, Any]]:
     url = (DATABASE_URL or "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres").strip()
+    connect_args: dict[str, Any] = {}
+
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+asyncpg://", 1)
     if url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if "sslmode=require" in url and "ssl" not in url:
-        return url
-    if "sslmode=require" in url and "?" not in url:
-        return f"{url}?sslmode=require"
-    if "sslmode=require" in url:
-        return url
-    if "postgresql+asyncpg://" in url and "?" not in url:
-        return f"{url}?sslmode=require"
-    return url
+
+    if any(token in url for token in ("sslmode=require", "ssl=require", "ssl=true")):
+        connect_args["ssl"] = True
+        parsed = urlparse(url)
+        query_items = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key not in {"sslmode", "ssl"}]
+        url = urlunparse(parsed._replace(query=urlencode(query_items)))
+
+    return url, connect_args
 
 
-engine = create_async_engine(_build_engine_url(), echo=False)
+ENGINE_URL, ENGINE_CONNECT_ARGS = _build_engine_config()
+engine = create_async_engine(ENGINE_URL, echo=False, connect_args=ENGINE_CONNECT_ARGS)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -79,6 +83,7 @@ async def init_db() -> None:
     """Create all required tables if they do not exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS preferences TEXT"))
 
 
 async def upsert_user_and_settings(
@@ -88,6 +93,7 @@ async def upsert_user_and_settings(
     stop_words: Optional[List[str]] = None,
     min_salary: Optional[int] = None,
     bio_prompt: Optional[str] = None,
+    preferences: Optional[str] = None,
     risk_sensitivity: Optional[str] = None,
 ) -> None:
     """Insert or update a user and their settings in a single transaction."""
@@ -108,6 +114,7 @@ async def upsert_user_and_settings(
                         stop_words=json.dumps(stop_words or []),
                         min_salary=min_salary,
                         bio_prompt=bio_prompt,
+                        preferences=preferences,
                         risk_sensitivity=risk_sensitivity,
                     )
                 )
@@ -116,6 +123,7 @@ async def upsert_user_and_settings(
                 settings.stop_words = json.dumps(stop_words or []) if stop_words is not None else settings.stop_words
                 settings.min_salary = min_salary if min_salary is not None else settings.min_salary
                 settings.bio_prompt = bio_prompt if bio_prompt is not None else settings.bio_prompt
+                settings.preferences = preferences if preferences is not None else settings.preferences
                 settings.risk_sensitivity = risk_sensitivity if risk_sensitivity is not None else settings.risk_sensitivity
 
 
@@ -125,7 +133,7 @@ async def get_all_users_with_settings() -> List[Dict[str, Any]]:
         result = await session.execute(
             """
             SELECT u.user_id, u.username, s.keywords, s.stop_words, s.min_salary,
-                   s.bio_prompt, s.risk_sensitivity
+                   s.bio_prompt, s.preferences, s.risk_sensitivity
             FROM users AS u
             LEFT JOIN user_settings AS s ON s.user_id = u.user_id
             ORDER BY u.user_id
@@ -141,7 +149,8 @@ async def get_all_users_with_settings() -> List[Dict[str, Any]]:
             "stop_words": json.loads(row[3]) if row[3] else [],
             "min_salary": row[4],
             "bio_prompt": row[5],
-            "risk_sensitivity": row[6],
+            "preferences": row[6],
+            "risk_sensitivity": row[7],
         }
         for row in rows
     ]
