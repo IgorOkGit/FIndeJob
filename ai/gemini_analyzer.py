@@ -24,7 +24,6 @@ except ImportError:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 MODELS_CASCADE = [
-    "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-8b",
